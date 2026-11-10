@@ -90,7 +90,7 @@ describe('mcp-cli launch', () => {
   it('darwin falls back to opening the derived .app when bundle id fails', async () => {
     const appDir = '/Users/dev/Applications/ResponsivelyApp.app';
     const {deps, opened} = makeDeps({
-      bridgeDir: path.join(appDir, 'Contents', 'Resources', 'mcp'),
+      bridgeDir: path.posix.join(appDir, 'Contents', 'Resources', 'mcp'),
       existsFn: (p) => p === appDir,
       execFileFn: vi.fn((_cmd: string, args: string[], cb: (e: Error | null) => void) => {
         opened.push(args);
