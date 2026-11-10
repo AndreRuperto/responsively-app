@@ -30,8 +30,11 @@ const MAC_BUNDLE_ID = 'app.responsively';
  * finds the exact install this bridge belongs to — even for relocated apps.
  */
 const derivedDarwinAppDir = (deps: LaunchDeps): string | null => {
-  const resourcesDir = path.dirname(deps.bridgeDir);
-  const appDir = path.dirname(path.dirname(resourcesDir));
+  // macOS paths must use POSIX semantics even when tests run on Windows.
+  // The injected platform is 'darwin', but Node's default path module follows
+  // the host platform (win32 in our Windows test runners).
+  const resourcesDir = path.posix.dirname(deps.bridgeDir);
+  const appDir = path.posix.dirname(path.posix.dirname(resourcesDir));
   return appDir.endsWith('.app') && deps.existsFn(appDir) ? appDir : null;
 };
 
@@ -41,7 +44,7 @@ const derivedBinary = (deps: LaunchDeps): string | null => {
     if (appDir === null) {
       return null;
     }
-    const binary = path.join(appDir, 'Contents', 'MacOS', 'ResponsivelyApp');
+    const binary = path.posix.join(appDir, 'Contents', 'MacOS', 'ResponsivelyApp');
     return deps.existsFn(binary) ? binary : null;
   }
   const resourcesDir = path.dirname(deps.bridgeDir);

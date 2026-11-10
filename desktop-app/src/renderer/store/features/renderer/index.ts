@@ -129,6 +129,15 @@ export const rendererSlice = createSlice({
         state.notifications = [...notifications, action.payload];
       }
     },
+    setZoomFactor: (state, action: PayloadAction<number>) => {
+      // Keep the fitted zoom compatible with the regular zoom controls.
+      if (!zoomSteps.includes(action.payload)) return;
+      if (state.layout === PREVIEW_LAYOUTS.INDIVIDUAL) {
+        state.individualZoomFactor = action.payload;
+      } else {
+        state.zoomFactor = action.payload;
+      }
+    },
     setCanvasZoom: (state, action: PayloadAction<number>) => {
       state.canvasZoom = clampCanvasZoom(action.payload);
     },
@@ -162,6 +171,7 @@ export const {
   setPageTitle,
   setNotifications,
   setCanvasZoom,
+  setZoomFactor,
   canvasZoomIn,
   canvasZoomOut,
   toggleCanvasOption,

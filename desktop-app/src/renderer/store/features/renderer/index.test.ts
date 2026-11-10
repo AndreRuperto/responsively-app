@@ -12,6 +12,7 @@ import reducer, {
   setNotifications,
   setPageTitle,
   setRotate,
+  setZoomFactor,
   zoomIn,
   zoomOut,
   RendererState,
@@ -44,6 +45,20 @@ describe('renderer slice', () => {
     const state = reducer(individual, zoomIn());
     expect(state.individualZoomFactor).toBe(1.1);
     expect(state.zoomFactor).toBe(1);
+  });
+
+  it('fit zoom snaps to a valid step and manual zoom still works', () => {
+    let state = reducer(undefined, setZoomFactor(0.5));
+    expect(state.zoomFactor).toBe(0.5);
+    state = reducer(state, zoomIn());
+    expect(state.zoomFactor).toBe(0.55);
+    state = reducer(state, setZoomFactor(0.42));
+    expect(state.zoomFactor).toBe(0.55);
+
+    state = reducer(state, setLayout(PREVIEW_LAYOUTS.INDIVIDUAL));
+    state = reducer(state, setZoomFactor(0.67));
+    expect(state.individualZoomFactor).toBe(0.67);
+    expect(state.zoomFactor).toBe(0.55);
   });
 
   it('zoomOut at the lowest step does not underflow', () => {

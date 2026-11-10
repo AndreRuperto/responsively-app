@@ -21,6 +21,9 @@ import {
   selectRotate,
   selectZoomFactor,
   setCanvasZoom,
+  setLayout,
+  setZoomFactor,
+  zoomSteps,
   toggleCanvasOption,
   zoomIn,
   zoomOut,
@@ -31,6 +34,8 @@ import {framedSize} from './Device/frames';
 import {PREVIEW_PINCH_EVENT, type PinchDetail} from './pinch';
 import DevtoolsResizer from './DevtoolsResizer';
 import IndividualLayoutToolbar from './IndividualLayoutToolBar';
+import DeviceNavigator from './DeviceNavigator';
+import {calculateFitScale, displayedSize, floorZoomStep} from './layoutSizing';
 
 interface CanvasPosition {
   x: number;
@@ -89,7 +94,10 @@ const arrangeDevices = (
 const Previewer = () => {
   const dispatch = useDispatch();
   const activeSuite = useSelector(selectActiveSuite);
-  const devices = activeSuite.devices.map((id) => getDevicesMap()[id]);
+  const devices = useMemo(
+    () => activeSuite.devices.map((id) => getDevicesMap()[id]),
+    [activeSuite.devices]
+  );
   const dockPosition = useSelector(selectDockPosition);
   const isDevtoolsOpen = useSelector(selectIsDevtoolsOpen);
   const layout = useSelector(selectLayout);
@@ -101,6 +109,7 @@ const Previewer = () => {
   const individualRotations = useSelector(selectIndividualRotations);
   const presenting = isPresenting && layout === PREVIEW_LAYOUTS.CANVAS;
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const [smartLayoutEnabled, setSmartLayoutEnabled] = useState(false);
   const [exitPillHidden, setExitPillHidden] = useState<boolean>(false);
   const exitPillRef = useRef<HTMLButtonElement>(null);
   const [individualDevice, setIndividualDevice] = useState<IDevice>(devices[0]);
@@ -373,8 +382,99 @@ const Previewer = () => {
     dragState.current = null;
   };
 
+  const focusPreview = (index: number) => {
+    const device = devices[index];
+    if (!device) return;
+
+    setSelectedDeviceId(device.id);
+    if (isIndividualLayout) {
+      setIndividualDevice(device);
+      return;
+    }
+
+    const frame = stageRef.current?.querySelector<HTMLElement>(
+      `[data-preview-device-index="${index}"]`
+    );
+    const scroller = frame?.parentElement;
+    if (!frame || !scroller) return;
+
+    if (layout === PREVIEW_LAYOUTS.COLUMN) {
+      // Scroll the *preview strip*, not the webview or the full app window.
+      const bounds = frame.getBoundingClientRect();
+      const parentBounds = scroller.getBoundingClientRect();
+      scroller.scrollBy({
+        left: bounds.left - parentBounds.left - scroller.clientWidth / 2 + bounds.width / 2,
+        behavior: 'smooth',
+      });
+    } else {
+      frame.scrollIntoView({behavior: 'smooth', inline: 'nearest', block: 'nearest'});
+    }
+  };
+
+  const fitAllPreviews = () => {
+    const stage = stageRef.current;
+    if (!stage || devices.length === 0) return;
+    const {width, height} = stage.getBoundingClientRect();
+    const fit = calculateFitScale(devices, width, height, rotateDevices, individualRotations);
+    setSmartLayoutEnabled(false);
+    dispatch(setZoomFactor(floorZoomStep(fit, zoomSteps)));
+    // With very small windows, wrapping beats permanently hiding devices.
+    dispatch(setLayout(fit >= zoomSteps[0] ? PREVIEW_LAYOUTS.COLUMN : PREVIEW_LAYOUTS.FLEX));
+  };
+
+  // Opt-in responsive mode: keep a single row when it can remain readable,
+  // otherwise switch to wrapped previews. Do not change Canvas/Individual.
+  useEffect(() => {
+    if (!smartLayoutEnabled || isCanvasLayout || isIndividualLayout || !stageRef.current) {
+      return undefined;
+    }
+    const stage = stageRef.current;
+    const update = () => {
+      const {width, height} = stage.getBoundingClientRect();
+      if (width <= 0 || height <= 0 || devices.length === 0) return;
+      const fit = calculateFitScale(devices, width, height, rotateDevices, individualRotations);
+      const singleRow = fit >= 0.5;
+      const desiredLayout = singleRow ? PREVIEW_LAYOUTS.COLUMN : PREVIEW_LAYOUTS.FLEX;
+      const widest = Math.max(
+        ...devices.map((device) =>
+          displayedSize(device, rotateDevices, individualRotations).width
+        )
+      );
+      const scale = singleRow
+        ? Math.min(fit, 1)
+        : Math.min(0.75, Math.max(0.25, (width - 64) / widest));
+      const desiredZoom = floorZoomStep(scale, zoomSteps);
+      if (layout !== desiredLayout) dispatch(setLayout(desiredLayout));
+      if (deviceScale !== desiredZoom) dispatch(setZoomFactor(desiredZoom));
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(stage);
+    update();
+    return () => observer.disconnect();
+  }, [
+    smartLayoutEnabled,
+    isCanvasLayout,
+    isIndividualLayout,
+    devices,
+    layout,
+    deviceScale,
+    rotateDevices,
+    individualRotations,
+    dispatch,
+  ]);
+
   return (
-    <div className="h-full">
+    <div className="flex h-full min-h-0 flex-col">
+      {!isCanvasLayout && !isIndividualLayout && (
+        <DeviceNavigator
+          devices={devices}
+          selectedId={selectedDeviceId ?? devices[0]?.id}
+          autoLayoutEnabled={smartLayoutEnabled}
+          onSelect={(id) => focusPreview(devices.findIndex((device) => device.id === id))}
+          onFitAll={fitAllPreviews}
+          onToggleAutoLayout={() => setSmartLayoutEnabled((value) => !value)}
+        />
+      )}
       {isIndividualLayout && (
         <IndividualLayoutToolbar
           individualDevice={individualDevice}
@@ -383,7 +483,7 @@ const Previewer = () => {
         />
       )}
       <div
-        className={cx('flex h-full', {
+        className={cx('flex min-h-0 flex-1', {
           'flex-col': dockPosition === DOCK_POSITION.BOTTOM,
           'flex-row': dockPosition === DOCK_POSITION.RIGHT,
           'justify-between': !isIndividualLayout,
@@ -503,7 +603,7 @@ const Previewer = () => {
                 incompatible with React 19); INDIVIDUAL hides the others;
                 CANVAS turns this same element into the transformed world. */}
             <div
-              data-testid={isCanvasLayout ? 'canvas-world' : undefined}
+              data-testid={isCanvasLayout ? 'canvas-world' : 'preview-layout-container'}
               className={cx({
                 'w-full p-2': isMasonryLayout,
                 'flex h-full gap-4 overflow-auto p-4': !isMasonryLayout && !isCanvasLayout,
@@ -526,6 +626,7 @@ const Previewer = () => {
                 <div
                   key={device.id}
                   data-canvas-item={isCanvasLayout ? device.id : undefined}
+                  data-preview-device-index={idx}
                   className={cx({
                     'w-fit break-inside-avoid p-4': isMasonryLayout,
                     hidden: isIndividualLayout && device.id !== individualDeviceId,

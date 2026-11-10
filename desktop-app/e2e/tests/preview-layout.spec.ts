@@ -74,4 +74,53 @@ test.describe('Preview Layout', () => {
     const columnBtn = app.page.locator('[data-testid="layout-COLUMN"]');
     await columnBtn.click();
   });
+  test('navigator reaches every device without remounting webviews', async ({app}) => {
+    await app.dismissModals();
+
+    const nav = app.page.getByTestId('device-navigator');
+    const chips = nav.getByTestId('device-chip');
+    await expect(nav).toBeVisible({timeout: 10_000});
+    const count = await app.webviews.count();
+    await expect(chips).toHaveCount(count);
+    await expect(nav.getByTestId('device-counter')).toHaveText(`1/${count}`);
+    await expect(nav.getByTestId('device-previous')).toBeDisabled();
+
+    if (count > 1) {
+      await nav.getByTestId('device-next').click();
+      await expect(nav.getByTestId('device-counter')).toHaveText(`2/${count}`);
+      await expect(chips.nth(1)).toHaveAttribute('aria-pressed', 'true');
+      await nav.getByTestId('device-previous').click();
+      await expect(chips.first()).toHaveAttribute('aria-pressed', 'true');
+    }
+
+    await expect(app.firstWebview).toBeAttached();
+    expect(await app.webviews.count()).toBe(count);
+  });
+
+  test('fit all scales a horizontal suite while preserving previews', async ({app}) => {
+    await app.dismissModals();
+    await app.page.getByTestId('layout-COLUMN').click();
+
+    const initialCount = await app.webviews.count();
+    await app.page.getByTestId('fit-all').click();
+
+    await expect(app.firstWebview).toBeAttached();
+    expect(await app.webviews.count()).toBe(initialCount);
+    const zoom = Number(await app.firstWebview.getAttribute('data-scale-factor'));
+    expect(zoom).toBeGreaterThan(0);
+    expect(zoom).toBeLessThanOrEqual(1);
+  });
+
+  test('auto layout can be enabled and disabled', async ({app}) => {
+    await app.dismissModals();
+
+    const auto = app.page.getByTestId('auto-layout');
+    await expect(auto).toHaveAttribute('aria-pressed', 'false');
+    await auto.click();
+    await expect(auto).toHaveAttribute('aria-pressed', 'true');
+    await expect(app.firstWebview).toBeAttached();
+    await auto.click();
+    await expect(auto).toHaveAttribute('aria-pressed', 'false');
+  });
+
 });
