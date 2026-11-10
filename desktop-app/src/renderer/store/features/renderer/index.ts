@@ -70,6 +70,15 @@ export const rendererSlice = createSlice({
   name: 'renderer',
   initialState,
   reducers: {
+    setZoomFactor: (state, action: PayloadAction<number>) => {
+      // Fit all uses the same discrete steps as the manual zoom buttons.
+      if (!zoomSteps.includes(action.payload)) return;
+      if (state.layout === PREVIEW_LAYOUTS.INDIVIDUAL) {
+        state.individualZoomFactor = action.payload;
+      } else {
+        state.zoomFactor = action.payload;
+      }
+    },
     setAddress: (state, action: PayloadAction<string>) => {
       if (action.payload !== state.address) {
         state.address = action.payload;
@@ -153,6 +162,7 @@ export const rendererSlice = createSlice({
 // Action creators are generated for each case reducer function
 export const {
   setAddress,
+  setZoomFactor,
   zoomIn,
   zoomOut,
   setRotate,
