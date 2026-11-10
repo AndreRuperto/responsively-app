@@ -130,8 +130,13 @@ export const rendererSlice = createSlice({
       }
     },
     setZoomFactor: (state, action: PayloadAction<number>) => {
-      // Only accept values the zoom controls can represent.
-      if (zoomSteps.includes(action.payload)) state.zoomFactor = action.payload;
+      // Keep the fitted zoom compatible with the regular zoom controls.
+      if (!zoomSteps.includes(action.payload)) return;
+      if (state.layout === PREVIEW_LAYOUTS.INDIVIDUAL) {
+        state.individualZoomFactor = action.payload;
+      } else {
+        state.zoomFactor = action.payload;
+      }
     },
     setCanvasZoom: (state, action: PayloadAction<number>) => {
       state.canvasZoom = clampCanvasZoom(action.payload);
