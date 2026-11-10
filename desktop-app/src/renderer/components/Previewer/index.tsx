@@ -23,18 +23,19 @@ import {
   setCanvasZoom,
   setLayout,
   setZoomFactor,
+  zoomSteps,
   toggleCanvasOption,
   zoomIn,
   zoomOut,
   type CanvasOptions,
 } from 'renderer/store/features/renderer';
 import Device from './Device';
-import DeviceNavigator from './DeviceNavigator';
-import {fitPreviewZoom, recommendPreviewLayout} from './navigationLayout';
 import {framedSize} from './Device/frames';
 import {PREVIEW_PINCH_EVENT, type PinchDetail} from './pinch';
 import DevtoolsResizer from './DevtoolsResizer';
 import IndividualLayoutToolbar from './IndividualLayoutToolBar';
+import DeviceNavigator from './DeviceNavigator';
+import {calculateFitScale, displayedSize, floorZoomStep} from './layoutSizing';
 
 interface CanvasPosition {
   x: number;
@@ -93,7 +94,10 @@ const arrangeDevices = (
 const Previewer = () => {
   const dispatch = useDispatch();
   const activeSuite = useSelector(selectActiveSuite);
-  const devices = activeSuite.devices.map((id) => getDevicesMap()[id]);
+  const devices = useMemo(
+    () => activeSuite.devices.map((id) => getDevicesMap()[id]),
+    [activeSuite.devices]
+  );
   const dockPosition = useSelector(selectDockPosition);
   const isDevtoolsOpen = useSelector(selectIsDevtoolsOpen);
   const layout = useSelector(selectLayout);
@@ -105,7 +109,7 @@ const Previewer = () => {
   const individualRotations = useSelector(selectIndividualRotations);
   const presenting = isPresenting && layout === PREVIEW_LAYOUTS.CANVAS;
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
-  const [autoLayoutEnabled, setAutoLayoutEnabled] = useState(false);
+  const [smartLayoutEnabled, setSmartLayoutEnabled] = useState(false);
   const [exitPillHidden, setExitPillHidden] = useState<boolean>(false);
   const exitPillRef = useRef<HTMLButtonElement>(null);
   const [individualDevice, setIndividualDevice] = useState<IDevice>(devices[0]);
@@ -131,7 +135,6 @@ const Previewer = () => {
     deviceId: string | null;
   } | null>(null);
   const stageRef = useRef<HTMLDivElement>(null);
-  const previewListRef = useRef<HTMLDivElement>(null);
   // Live position of the frame being dragged; committed to the store on drop.
   const [dragOverride, setDragOverride] = useState<{id: string; position: CanvasPosition} | null>(
     null
@@ -223,140 +226,6 @@ const Previewer = () => {
       arranged[idx] ?? {x: CANVAS_ORIGIN, y: CANVAS_ORIGIN}
     );
   };
-
-
-  // Share the same measured device sizes with navigation, fit and auto layout.
-  // Keep the viewport dimensions unscaled; the zoom is applied when fitting.
-  const viewportSizes = useMemo(
-    () => devices.map((device) => {
-      const rotated = device.isMobileCapable &&
-        (rotateDevices || individualRotations[device.id]);
-      return rotated
-        ? {width: device.height, height: device.width}
-        : {width: device.width, height: device.height};
-    }),
-    // Device objects are stable for the same suite device IDs.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [deviceIdsKey, rotateDevices, individualRotations]
-  );
-  const effectiveSelectedId = isIndividualLayout
-    ? individualDeviceId
-    : devices.some((device) => device.id === selectedDeviceId)
-      ? selectedDeviceId!
-      : devices[0]?.id;
-
-  const selectDevice = (id: string) => {
-    const index = devices.findIndex((device) => device.id === id);
-    if (index < 0) return;
-    const device = devices[index];
-    setSelectedDeviceId(id);
-
-    if (isIndividualLayout) {
-      setIndividualDevice(device);
-      return;
-    }
-
-    if (isCanvasLayout) {
-      const stage = stageRef.current;
-      if (!stage) return;
-      const position = positionFor(device, index);
-      const viewport = viewportSizes[index];
-      const footprint = canvasOptions.showBezels
-        ? framedSize(device, viewport.width, viewport.height)
-        : viewport;
-      setCanvasPan({
-        x: stage.clientWidth / 2 - (position.x + footprint.width * deviceScale / 2) * canvasZoom,
-        y: stage.clientHeight / 2 - (position.y + footprint.height * deviceScale / 2) * canvasZoom,
-      });
-      return;
-    }
-
-    const target = Array.from(previewListRef.current?.children ?? []).find(
-      (child) => child.getAttribute('data-preview-device') === id
-    );
-    const scrollArea = isMasonryLayout ? stageRef.current : previewListRef.current;
-    if (!target || !scrollArea) return;
-    const rect = target.getBoundingClientRect();
-    const containerRect = scrollArea.getBoundingClientRect();
-    scrollArea.scrollTo({
-      left: scrollArea.scrollLeft + rect.left - containerRect.left -
-        (scrollArea.clientWidth - rect.width) / 2,
-      top: scrollArea.scrollTop + rect.top - containerRect.top -
-        (scrollArea.clientHeight - rect.height) / 2,
-      behavior: 'smooth',
-    });
-  };
-
-  const fitAllDevices = () => {
-    const stage = stageRef.current;
-    if (!stage || devices.length === 0) return;
-
-    if (isCanvasLayout) {
-      const footprints = devices.map((device, index) => {
-        const viewport = viewportSizes[index];
-        const size = canvasOptions.showBezels
-          ? framedSize(device, viewport.width, viewport.height)
-          : viewport;
-        const position = positionFor(device, index);
-        return {
-          left: position.x,
-          top: position.y,
-          right: position.x + size.width * deviceScale,
-          bottom: position.y + size.height * deviceScale,
-        };
-      });
-      const left = Math.min(...footprints.map((frame) => frame.left));
-      const top = Math.min(...footprints.map((frame) => frame.top));
-      const right = Math.max(...footprints.map((frame) => frame.right));
-      const bottom = Math.max(...footprints.map((frame) => frame.bottom));
-      const zoom = clampCanvasZoom(Math.min(
-        1.25,
-        Math.max(1, stage.clientWidth - 48) / Math.max(1, right - left),
-        Math.max(1, stage.clientHeight - 48) / Math.max(1, bottom - top)
-      ));
-      dispatch(setCanvasZoom(zoom));
-      setCanvasPan({
-        x: stage.clientWidth / 2 - ((left + right) / 2) * zoom,
-        y: stage.clientHeight / 2 - ((top + bottom) / 2) * zoom,
-      });
-      return;
-    }
-
-    // CSS columns are not predictable enough to fit mathematically.
-    // Switch Masonry to a responsive grid; keep existing webviews mounted.
-    const targetLayout = isMasonryLayout ? PREVIEW_LAYOUTS.FLEX : layout;
-    const selectedIndex = Math.max(0, devices.findIndex((device) => device.id === individualDeviceId));
-    const sizes = isIndividualLayout ? [viewportSizes[selectedIndex]] : viewportSizes;
-    const fitLayout = targetLayout === PREVIEW_LAYOUTS.COLUMN
-      ? PREVIEW_LAYOUTS.COLUMN
-      : PREVIEW_LAYOUTS.FLEX;
-    const zoom = fitPreviewZoom(sizes, stage.clientWidth, stage.clientHeight, fitLayout);
-    if (isMasonryLayout) dispatch(setLayout(PREVIEW_LAYOUTS.FLEX));
-    dispatch(setZoomFactor(zoom));
-    previewListRef.current?.scrollTo({left: 0, top: 0});
-  };
-
-  // Auto mode reacts to actual preview area size, including devtools resizing.
-  // It deliberately uses unscaled widths to avoid oscillating between row/grid
-  // whenever the fitted zoom changes.
-  useEffect(() => {
-    if (!autoLayoutEnabled) return undefined;
-    const stage = stageRef.current;
-    if (!stage) return undefined;
-    const applyLayout = () => {
-      if (viewportSizes.length === 0) return;
-      const nextLayout = recommendPreviewLayout(viewportSizes, stage.clientWidth);
-      const zoom = fitPreviewZoom(
-        viewportSizes, stage.clientWidth, stage.clientHeight, nextLayout
-      );
-      dispatch(setLayout(nextLayout));
-      dispatch(setZoomFactor(zoom));
-    };
-    const observer = new ResizeObserver(applyLayout);
-    observer.observe(stage);
-    applyLayout();
-    return () => observer.disconnect();
-  }, [autoLayoutEnabled, viewportSizes, dispatch]);
 
   // The exit pill gets out of the way when the mouse is still (screenshots
   // shouldn't have chrome in them) and returns on any movement.
@@ -513,8 +382,99 @@ const Previewer = () => {
     dragState.current = null;
   };
 
+  const focusPreview = (index: number) => {
+    const device = devices[index];
+    if (!device) return;
+
+    setSelectedDeviceId(device.id);
+    if (isIndividualLayout) {
+      setIndividualDevice(device);
+      return;
+    }
+
+    const frame = stageRef.current?.querySelector<HTMLElement>(
+      `[data-preview-device-index="${index}"]`
+    );
+    const scroller = frame?.parentElement;
+    if (!frame || !scroller) return;
+
+    if (layout === PREVIEW_LAYOUTS.COLUMN) {
+      // Scroll the *preview strip*, not the webview or the full app window.
+      const bounds = frame.getBoundingClientRect();
+      const parentBounds = scroller.getBoundingClientRect();
+      scroller.scrollBy({
+        left: bounds.left - parentBounds.left - scroller.clientWidth / 2 + bounds.width / 2,
+        behavior: 'smooth',
+      });
+    } else {
+      frame.scrollIntoView({behavior: 'smooth', inline: 'nearest', block: 'nearest'});
+    }
+  };
+
+  const fitAllPreviews = () => {
+    const stage = stageRef.current;
+    if (!stage || devices.length === 0) return;
+    const {width, height} = stage.getBoundingClientRect();
+    const fit = calculateFitScale(devices, width, height, rotateDevices, individualRotations);
+    setSmartLayoutEnabled(false);
+    dispatch(setZoomFactor(floorZoomStep(fit, zoomSteps)));
+    // With very small windows, wrapping beats permanently hiding devices.
+    dispatch(setLayout(fit >= zoomSteps[0] ? PREVIEW_LAYOUTS.COLUMN : PREVIEW_LAYOUTS.FLEX));
+  };
+
+  // Opt-in responsive mode: keep a single row when it can remain readable,
+  // otherwise switch to wrapped previews. Do not change Canvas/Individual.
+  useEffect(() => {
+    if (!smartLayoutEnabled || isCanvasLayout || isIndividualLayout || !stageRef.current) {
+      return undefined;
+    }
+    const stage = stageRef.current;
+    const update = () => {
+      const {width, height} = stage.getBoundingClientRect();
+      if (width <= 0 || height <= 0 || devices.length === 0) return;
+      const fit = calculateFitScale(devices, width, height, rotateDevices, individualRotations);
+      const singleRow = fit >= 0.5;
+      const desiredLayout = singleRow ? PREVIEW_LAYOUTS.COLUMN : PREVIEW_LAYOUTS.FLEX;
+      const widest = Math.max(
+        ...devices.map((device) =>
+          displayedSize(device, rotateDevices, individualRotations).width
+        )
+      );
+      const scale = singleRow
+        ? Math.min(fit, 1)
+        : Math.min(0.75, Math.max(0.25, (width - 64) / widest));
+      const desiredZoom = floorZoomStep(scale, zoomSteps);
+      if (layout !== desiredLayout) dispatch(setLayout(desiredLayout));
+      if (deviceScale !== desiredZoom) dispatch(setZoomFactor(desiredZoom));
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(stage);
+    update();
+    return () => observer.disconnect();
+  }, [
+    smartLayoutEnabled,
+    isCanvasLayout,
+    isIndividualLayout,
+    devices,
+    layout,
+    deviceScale,
+    rotateDevices,
+    individualRotations,
+    dispatch,
+  ]);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {!isCanvasLayout && !isIndividualLayout && (
+        <DeviceNavigator
+          devices={devices}
+          selectedId={selectedDeviceId ?? devices[0]?.id}
+          autoLayoutEnabled={smartLayoutEnabled}
+          onSelect={(id) => focusPreview(devices.findIndex((device) => device.id === id))}
+          onFitAll={fitAllPreviews}
+          onToggleAutoLayout={() => setSmartLayoutEnabled((value) => !value)}
+        />
+      )}
       {isIndividualLayout && (
         <IndividualLayoutToolbar
           individualDevice={individualDevice}
@@ -522,16 +482,6 @@ const Previewer = () => {
           devices={devices}
         />
       )}
-      {!presenting && devices.length > 0 ? (
-        <DeviceNavigator
-          devices={devices}
-          selectedId={effectiveSelectedId}
-          onSelect={selectDevice}
-          onFitAll={fitAllDevices}
-          autoLayoutEnabled={autoLayoutEnabled}
-          onToggleAutoLayout={() => setAutoLayoutEnabled((enabled) => !enabled)}
-        />
-      ) : null}
       <div
         className={cx('flex min-h-0 flex-1', {
           'flex-col': dockPosition === DOCK_POSITION.BOTTOM,
@@ -653,8 +603,7 @@ const Previewer = () => {
                 incompatible with React 19); INDIVIDUAL hides the others;
                 CANVAS turns this same element into the transformed world. */}
             <div
-              ref={previewListRef}
-              data-testid={isCanvasLayout ? 'canvas-world' : undefined}
+              data-testid={isCanvasLayout ? 'canvas-world' : 'preview-layout-container'}
               className={cx({
                 'w-full p-2': isMasonryLayout,
                 'flex h-full gap-4 overflow-auto p-4': !isMasonryLayout && !isCanvasLayout,
@@ -677,7 +626,7 @@ const Previewer = () => {
                 <div
                   key={device.id}
                   data-canvas-item={isCanvasLayout ? device.id : undefined}
-                  data-preview-device={device.id}
+                  data-preview-device-index={idx}
                   className={cx({
                     'w-fit break-inside-avoid p-4': isMasonryLayout,
                     hidden: isIndividualLayout && device.id !== individualDeviceId,
